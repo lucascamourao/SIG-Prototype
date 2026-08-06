@@ -1,12 +1,9 @@
-// use rfc and tab to create react funcional component
 'use client';
 
-import { MapContainer, TileLayer, Marker, Popup, Tooltip, Polyline, Polygon } from 'react-leaflet';
-import MapEvents from './MapEvents';
-import 'leaflet/dist/leaflet.css';
-import { DEFAULT_CENTER, DEFAULT_ZOOM } from '@/utils/constants';
-import '@/lib/leaflet-icon';
-import { useEffect, useState } from 'react';
+import 'maplibre-gl/dist/maplibre-gl.css';
+
+import * as maplibregl from 'maplibre-gl';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import CreateLocationModal from '../Location/CreateLocationModal';
 import { Location } from '@/types/location';
 import { locationService } from '@/services/locationService';
@@ -21,7 +18,8 @@ import ZoneDetailsModal from '../Zone/ZoneDetailsModal';
 import { Relation } from '@/types/relation';
 import { relationService } from '@/services/relationService';
 import CreateRelationModal from '../Relation/CreateRelationModal';
-import MapResize from './MapResize';
+import { DEFAULT_CENTER, DEFAULT_ZOOM } from '@/utils/constants';
+import type * as GeoJSON from 'geojson';
 
 interface MapClientProps {
   selectedTool: Tool;
@@ -31,6 +29,23 @@ interface MapClientProps {
   setIsZoneModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
+type MapGeoJson = GeoJSON.FeatureCollection<GeoJSON.Geometry, GeoJSON.GeoJsonProperties>;
+
+const emptyFeatureCollection: MapGeoJson = {
+  type: 'FeatureCollection',
+  features: [],
+};
+
+function coordinatesToRing(coordinates: Coordinate[]) {
+  if (coordinates.length === 0) return [];
+
+  const ring = coordinates.map((coordinate) => [coordinate.lng, coordinate.lat]);
+  const firstCoordinate = coordinates[0];
+  ring.push([firstCoordinate.lng, firstCoordinate.lat]);
+
+  return ring;
+}
+
 export default function MapClient({
   selectedTool,
   drawingCoordinates,
@@ -38,6 +53,14 @@ export default function MapClient({
   isZoneModalOpen,
   setIsZoneModalOpen,
 }: MapClientProps) {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const markersRef = useRef<maplibregl.Marker[]>([]);
+  const handleMapClickRef = useRef<(lat: number, lng: number) => void>(() => {});
+  const handleLocationClickRef = useRef<(location: Location) => void>(() => {});
+  const handleZoneClickRef = useRef<(zone: Zone) => void>(() => {});
+
+  const [isMapReady, setIsMapReady] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const [selectedPosition, setSelectedPosition] = useState<{
@@ -55,7 +78,10 @@ export default function MapClient({
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
   const [isLocationDetailsOpen, setIsLocationDetailsOpen] = useState(false);
 
-  const locationsMap = Object.fromEntries(locations.map((location) => [location.id, location]));
+  const locationsMap = useMemo(
+    () => Object.fromEntries(locations.map((location) => [location.id, location])),
+    [locations]
+  );
 
   const [relations, setRelations] = useState<Relation[]>([]);
   const [firstSelectedRelationLocationId, setFirstSelectedRelationLocationId] = useState<
@@ -68,6 +94,7 @@ export default function MapClient({
   } | null>(null);
 
   // load functions =======================================================
+
   async function loadLocations() {
     const data = await locationService.getAll();
 
@@ -90,6 +117,7 @@ export default function MapClient({
 
   // useEffect: chamadas no mesmo momento
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadLocations();
     loadZones();
     loadRelations();
@@ -105,6 +133,7 @@ export default function MapClient({
   // useEffect para limpar relação temporária (antes da confirmação do formulário)
   useEffect(() => {
     if (selectedTool !== 'relation') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFirstSelectedRelationLocationId(null);
       setPendingRelation(null);
     }
@@ -124,7 +153,6 @@ export default function MapClient({
         break;
 
       default:
-        // relation e none
         break;
     }
   }
@@ -135,13 +163,15 @@ export default function MapClient({
         await handleRelationClick(location);
         break;
 
-      case 'none':
+      case 'none': {
         const currLocation = locationsMap[location.id];
 
         if (!currLocation) return;
 
         setSelectedLocation(location);
         setIsLocationDetailsOpen(true);
+        break;
+      }
 
       default:
         break;
@@ -198,98 +228,280 @@ export default function MapClient({
       )
     );
 
-    console.log(pointsInside);
     setSelectedZone(zone);
     setLocationsInsideZone(pointsInside);
     setIsZoneDetailsOpen(true);
   }
 
-  // ====================================================================
+  useEffect(() => {
+    handleMapClickRef.current = handleMapClick;
+    handleLocationClickRef.current = (location) => {
+      void handleLocationClick(location);
+    };
+    handleZoneClickRef.current = handleZoneClick;
+  });
+
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      center: [DEFAULT_CENTER[1], DEFAULT_CENTER[0]],
+      zoom: DEFAULT_ZOOM,
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors',
+          },
+        },
+        layers: [
+          {
+            id: 'osm',
+            type: 'raster',
+            source: 'osm',
+          },
+        ],
+      },
+    });
+
+    mapRef.current = map;
+
+    map.on('click', (event) => {
+      handleMapClickRef.current(event.lngLat.lat, event.lngLat.lng);
+    });
+
+    map.on('load', () => {
+      map.addSource('zones', {
+        type: 'geojson',
+        data: emptyFeatureCollection,
+      });
+      map.addLayer({
+        id: 'zones-fill',
+        type: 'fill',
+        source: 'zones',
+        paint: {
+          'fill-color': ['coalesce', ['get', 'color'], '#1677ff'],
+          'fill-opacity': 0.24,
+        },
+      });
+      map.addLayer({
+        id: 'zones-line',
+        type: 'line',
+        source: 'zones',
+        paint: {
+          'line-color': ['coalesce', ['get', 'color'], '#1677ff'],
+          'line-width': 3,
+        },
+      });
+
+      map.addSource('drawing-zone', {
+        type: 'geojson',
+        data: emptyFeatureCollection,
+      });
+      map.addLayer({
+        id: 'drawing-zone-line',
+        type: 'line',
+        source: 'drawing-zone',
+        paint: {
+          'line-color': '#1677ff',
+          'line-width': 3,
+          'line-dasharray': [2, 2],
+        },
+      });
+
+      map.addSource('relations', {
+        type: 'geojson',
+        data: emptyFeatureCollection,
+      });
+      map.addLayer({
+        id: 'relations-line',
+        type: 'line',
+        source: 'relations',
+        paint: {
+          'line-color': 'green',
+          'line-width': 4,
+          'line-dasharray': [2, 1],
+        },
+      });
+
+      setIsMapReady(true);
+      setTimeout(() => map.resize(), 0);
+    });
+
+    return () => {
+      markersRef.current.forEach((marker) => marker.remove());
+      markersRef.current = [];
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+
+    markersRef.current.forEach((marker) => marker.remove());
+    markersRef.current = locations.map((location) => {
+      const markerElement = document.createElement('button');
+      markerElement.type = 'button';
+      markerElement.className = 'map-location-marker';
+      markerElement.setAttribute('aria-label', location.name);
+      markerElement.title = location.name;
+      markerElement.addEventListener('click', (event) => {
+        event.stopPropagation();
+        handleLocationClickRef.current(location);
+      });
+
+      return new maplibregl.Marker({ element: markerElement })
+        .setLngLat([location.lng, location.lat])
+        .addTo(mapRef.current!);
+    });
+  }, [isMapReady, locations]);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+
+    const map = mapRef.current;
+    const source = map?.getSource('zones') as maplibregl.GeoJSONSource | undefined;
+    if (!map || !source) return;
+
+    const zonesGeoJson: MapGeoJson = {
+      type: 'FeatureCollection',
+      features: zones
+        .filter((zone) => zone.coordinates.length >= 3)
+        .map((zone) => ({
+          type: 'Feature',
+          properties: {
+            id: zone.id,
+            color: zone.color,
+          },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [coordinatesToRing(zone.coordinates)],
+          },
+        })),
+    };
+
+    source.setData(zonesGeoJson);
+  }, [isMapReady, zones]);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+
+    const source = mapRef.current?.getSource('drawing-zone') as
+      maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+
+    const drawingGeoJson: MapGeoJson =
+      selectedTool === 'zone' && drawingCoordinates.length >= 3
+        ? {
+            type: 'FeatureCollection',
+            features: [
+              {
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'Polygon',
+                  coordinates: [coordinatesToRing(drawingCoordinates)],
+                },
+              },
+            ],
+          }
+        : emptyFeatureCollection;
+
+    source.setData(drawingGeoJson);
+  }, [isMapReady, selectedTool, drawingCoordinates]);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+
+    const source = mapRef.current?.getSource('relations') as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+
+    const relationsGeoJson: MapGeoJson = {
+      type: 'FeatureCollection',
+      features: relations.flatMap((relation) => {
+        const sourceLocation = locationsMap[relation.sourceId];
+        const targetLocation = locationsMap[relation.targetId];
+
+        if (!sourceLocation || !targetLocation) {
+          return [];
+        }
+
+        return [
+          {
+            type: 'Feature' as const,
+            properties: {
+              name: relation.name,
+              sourceName: sourceLocation.name,
+              targetName: targetLocation.name,
+            },
+            geometry: {
+              type: 'LineString' as const,
+              coordinates: [
+                [sourceLocation.lng, sourceLocation.lat],
+                [targetLocation.lng, targetLocation.lat],
+              ],
+            },
+          },
+        ];
+      }),
+    };
+
+    source.setData(relationsGeoJson);
+  }, [isMapReady, relations, locationsMap]);
+
+  useEffect(() => {
+    if (!isMapReady) return;
+
+    const map = mapRef.current;
+    if (!map) return;
+
+    const onZoneClick = (event: maplibregl.MapLayerMouseEvent) => {
+      if (selectedTool !== 'none') return;
+
+      const zoneId = event.features?.[0]?.properties?.id;
+      const zone = zones.find((currentZone) => currentZone.id === zoneId);
+
+      if (zone) {
+        handleZoneClickRef.current(zone);
+      }
+    };
+
+    const onRelationClick = (event: maplibregl.MapLayerMouseEvent) => {
+      const feature = event.features?.[0];
+      const coordinates = event.lngLat;
+      const name = feature?.properties?.name;
+      const sourceName = feature?.properties?.sourceName;
+      const targetName = feature?.properties?.targetName;
+
+      if (!name || !sourceName || !targetName) return;
+
+      const popupContent = document.createElement('div');
+      const popupTitle = document.createElement('strong');
+      popupTitle.textContent = name;
+      const popupRelation = document.createElement('div');
+      popupRelation.textContent = `${sourceName} -> ${targetName}`;
+      popupContent.append(popupTitle, popupRelation);
+
+      new maplibregl.Popup().setLngLat(coordinates).setDOMContent(popupContent).addTo(map);
+    };
+
+    map.on('click', 'zones-fill', onZoneClick);
+    map.on('click', 'relations-line', onRelationClick);
+
+    return () => {
+      map.off('click', 'zones-fill', onZoneClick);
+      map.off('click', 'relations-line', onRelationClick);
+    };
+  }, [isMapReady, selectedTool, zones, locations]);
 
   return (
     <>
-      <MapContainer
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
-        style={{
-          width: '100%',
-          height: '100%',
-        }}
-      >
-        <TileLayer
-          attribution="© OpenStreetMap contributors"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-
-        <MapResize />
-
-        <MapEvents onMapClick={handleMapClick} />
-
-        {locations.map((location) => (
-          <Marker
-            key={location.id}
-            position={[location.lat, location.lng]}
-            eventHandlers={{
-              click: () => handleLocationClick(location),
-            }}
-          >
-            <Tooltip>{location.name}</Tooltip>
-          </Marker>
-        ))}
-
-        {selectedTool === 'zone' && drawingCoordinates.length >= 3 && (
-          <Polygon positions={drawingCoordinates} pathOptions={{ dashArray: '5,5' }}></Polygon>
-        )}
-
-        {zones.map((zone) => (
-          <Polygon
-            key={zone.id}
-            positions={zone.coordinates}
-            pathOptions={{
-              color: zone.color,
-            }}
-            eventHandlers={{
-              click: () => {
-                if (selectedTool === 'none') {
-                  handleZoneClick(zone);
-                }
-              },
-            }}
-          />
-        ))}
-
-        {relations.map((relation) => {
-          const source = locationsMap[relation.sourceId];
-          const target = locationsMap[relation.targetId];
-
-          if (!source || !target) {
-            return null;
-          }
-
-          return (
-            <Polyline
-              key={relation.id}
-              positions={[
-                [source.lat, source.lng],
-                [target.lat, target.lng],
-              ]}
-              pathOptions={{
-                color: 'green',
-                weight: 4,
-                dashArray: '8,4',
-              }}
-            >
-              <Tooltip sticky>{relation.name}</Tooltip>
-
-              <Popup>
-                <strong>{relation.name}</strong>
-                <br />
-                {source.name} → {target.name}
-              </Popup>
-            </Polyline>
-          );
-        })}
-      </MapContainer>
+      <div ref={mapContainerRef} className="maplibre-map" />
 
       <CreateLocationModal
         open={isModalOpen}

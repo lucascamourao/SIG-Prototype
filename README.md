@@ -1,6 +1,6 @@
 # Prototype
 
-Protótipo desenvolvido com **Next.js**, **React Leaflet**, **Ant Design** e **JSON Server** para experimentação de funcionalidades de geoprocessamento e visualização de grafos.
+Protótipo desenvolvido com **Next.js**, **MapLibre GL JS**, **Ant Design** e **JSON Server** para experimentação de funcionalidades de geoprocessamento e visualização de grafos.
 
 ## Tecnologias
 
@@ -8,7 +8,7 @@ Protótipo desenvolvido com **Next.js**, **React Leaflet**, **Ant Design** e **J
 - React 19
 - TypeScript
 - Ant Design
-- Leaflet / React Leaflet
+- MapLibre GL JS
 - React Flow
 - Axios
 - JSON Server
@@ -95,7 +95,7 @@ npm run lint      # Executa o ESLint
 
 ## Funcionalidades implementadas
 
-- ✅ Renderização do mapa utilizando Leaflet
+- ✅ Renderização do mapa utilizando MapLibre
 - ✅ Coordenada inicial configurável
 - ✅ Marcadores personalizados
 - ✅ Popup nos marcadores
