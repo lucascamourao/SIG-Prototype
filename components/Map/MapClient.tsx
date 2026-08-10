@@ -36,12 +36,23 @@ const emptyFeatureCollection: MapGeoJson = {
   features: [],
 };
 
-function coordinatesToRing(coordinates: Coordinate[]) {
-  if (coordinates.length === 0) return [];
+function coordinatesToRing(coordinates: Coordinate[]): number[][] {
+  if (coordinates.length < 3) return [];
 
-  const ring = coordinates.map((coordinate) => [coordinate.lng, coordinate.lat]);
-  const firstCoordinate = coordinates[0];
-  ring.push([firstCoordinate.lng, firstCoordinate.lat]);
+  const ring = coordinates.map(({ lng, lat }) => [lng, lat]);
+
+  const area = ring.reduce((sum, [x1, y1], index) => {
+    const [x2, y2] = ring[(index + 1) % ring.length];
+
+    return sum + x1 * y2 - x2 * y1;
+  }, 0);
+
+  // Garante orientação anti-horária para o anel externo
+  if (area < 0) {
+    ring.reverse();
+  }
+
+  ring.push([...ring[0]]);
 
   return ring;
 }
@@ -250,6 +261,7 @@ export default function MapClient({
       zoom: DEFAULT_ZOOM,
       style: {
         version: 8,
+        glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
         sources: {
           osm: {
             type: 'raster',
@@ -297,6 +309,26 @@ export default function MapClient({
           'line-width': 3,
         },
       });
+      map.addLayer({
+        id: 'zones-label',
+        type: 'symbol',
+        source: 'zones',
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-size': 13,
+          'text-font': ['Noto Sans Regular'],
+          'text-anchor': 'center',
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': '#111827',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2,
+        },
+      });
+
+      console.log('teste');
+      console.log(map.getStyle().layers.map((l) => l.id));
 
       map.addSource('drawing-zone', {
         type: 'geojson',
@@ -318,19 +350,49 @@ export default function MapClient({
         data: emptyFeatureCollection,
       });
       map.addLayer({
+        id: 'relations-casing',
+        type: 'line',
+        source: 'relations',
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 7,
+          'line-opacity': 0.9,
+        },
+      });
+      map.addLayer({
         id: 'relations-line',
         type: 'line',
         source: 'relations',
         paint: {
-          'line-color': 'green',
+          'line-color': '#15803d',
           'line-width': 4,
           'line-dasharray': [2, 1],
+        },
+      });
+      map.addLayer({
+        id: 'relations-label',
+        type: 'symbol',
+        source: 'relations',
+        layout: {
+          'symbol-placement': 'line',
+          'text-field': ['get', 'name'],
+          'text-size': 12,
+          'text-font': ['Noto Sans Regular'],
+        },
+        paint: {
+          'text-color': '#14532d',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2,
         },
       });
 
       setIsMapReady(true);
       setTimeout(() => map.resize(), 0);
     });
+
+    console.log('imprimindo getLayer zones-fill e zones-line: ');
+    console.log(map.getLayer('zones-fill'));
+    console.log(map.getLayer('zones-line'));
 
     return () => {
       markersRef.current.forEach((marker) => marker.remove());
@@ -366,6 +428,8 @@ export default function MapClient({
 
     const map = mapRef.current;
     const source = map?.getSource('zones') as maplibregl.GeoJSONSource | undefined;
+    console.log('Imprimir source: ');
+    console.log(source);
     if (!map || !source) return;
 
     const zonesGeoJson: MapGeoJson = {
@@ -376,6 +440,7 @@ export default function MapClient({
           type: 'Feature',
           properties: {
             id: zone.id,
+            name: zone.name,
             color: zone.color,
           },
           geometry: {
@@ -385,7 +450,43 @@ export default function MapClient({
         })),
     };
 
+    console.log('Atualizando zonas', zonesGeoJson);
+
+    const checkSource = (event: any) => {
+      if (event.sourceId !== 'zones') {
+        return;
+      }
+
+      console.log('Source event:', {
+        sourceId: event.sourceId,
+        sourceDataType: event.sourceDataType,
+        isSourceLoaded: event.isSourceLoaded,
+      });
+
+      if (event.isSourceLoaded) {
+        const features = map.querySourceFeatures('zones');
+
+        console.log('Source carregado:', features.length);
+        console.log('Features:', features);
+
+        map.off('sourcedata', checkSource);
+      }
+    };
+
+    map.on('sourcedata', checkSource);
+
     source.setData(zonesGeoJson);
+
+    /*
+    map.once('idle', () => {
+      const features = map.queryRenderedFeatures({
+        layers: ['zones-fill'],
+      });
+
+      console.log('Features renderizadas:', features.length);
+      console.log(features);
+    });
+    */
   }, [isMapReady, zones]);
 
   useEffect(() => {
@@ -394,6 +495,8 @@ export default function MapClient({
     const source = mapRef.current?.getSource('drawing-zone') as
       maplibregl.GeoJSONSource | undefined;
     if (!source) return;
+
+    console.log(zones);
 
     const drawingGeoJson: MapGeoJson =
       selectedTool === 'zone' && drawingCoordinates.length >= 3
@@ -489,13 +592,31 @@ export default function MapClient({
 
       new maplibregl.Popup().setLngLat(coordinates).setDOMContent(popupContent).addTo(map);
     };
+    const onInteractiveMouseEnter = () => {
+      map.getCanvas().style.cursor = 'pointer';
+    };
+    const onInteractiveMouseLeave = () => {
+      map.getCanvas().style.cursor = '';
+    };
 
     map.on('click', 'zones-fill', onZoneClick);
+    map.on('click', 'zones-label', onZoneClick);
     map.on('click', 'relations-line', onRelationClick);
+    map.on('click', 'relations-label', onRelationClick);
+    map.on('mouseenter', 'zones-fill', onInteractiveMouseEnter);
+    map.on('mouseleave', 'zones-fill', onInteractiveMouseLeave);
+    map.on('mouseenter', 'relations-line', onInteractiveMouseEnter);
+    map.on('mouseleave', 'relations-line', onInteractiveMouseLeave);
 
     return () => {
       map.off('click', 'zones-fill', onZoneClick);
+      map.off('click', 'zones-label', onZoneClick);
       map.off('click', 'relations-line', onRelationClick);
+      map.off('click', 'relations-label', onRelationClick);
+      map.off('mouseenter', 'zones-fill', onInteractiveMouseEnter);
+      map.off('mouseleave', 'zones-fill', onInteractiveMouseLeave);
+      map.off('mouseenter', 'relations-line', onInteractiveMouseEnter);
+      map.off('mouseleave', 'relations-line', onInteractiveMouseLeave);
     };
   }, [isMapReady, selectedTool, zones, locations]);
 
