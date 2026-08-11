@@ -12,7 +12,7 @@ interface SidebarProps {
   selectedTool: Tool;
   onToolChange: (tool: Tool) => void;
   canFinishZone: boolean;
-  onFinishZone: (tool: Tool) => void;
+  onFinishZone: () => void;
 }
 
 export default function Sidebar({
