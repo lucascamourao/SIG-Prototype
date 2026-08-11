@@ -42,3 +42,6 @@ next-env.d.ts
 
 # database
 mocks/db.json
+
+# notas de planejamento locais
+/docs/superpowers/
