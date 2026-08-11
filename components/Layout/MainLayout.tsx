@@ -4,7 +4,7 @@ import { Layout } from 'antd';
 import { useState } from 'react';
 
 import Sidebar from '../Sidebar/Sidebar';
-import Map from '../Map/Map';
+import Map from '../Map';
 
 import { Tool } from '@/types/tool';
 import { Coordinate } from '@/types/coordinate';
