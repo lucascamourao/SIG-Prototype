@@ -257,7 +257,7 @@ export default function MapClient({
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      center: [DEFAULT_CENTER[1], DEFAULT_CENTER[0]],
+      center: [DEFAULT_CENTER.longitude, DEFAULT_CENTER.latitude],
       zoom: DEFAULT_ZOOM,
       style: {
         version: 8,
