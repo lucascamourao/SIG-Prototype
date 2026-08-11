@@ -1,6 +1,7 @@
 'use client';
 
 import 'maplibre-gl/dist/maplibre-gl.css';
+import './lib/mapWorker';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Map, {
