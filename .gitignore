@@ -45,3 +45,6 @@ mocks/db.json
 
 # notas de planejamento locais
 /docs/superpowers/
+
+# copiado de node_modules por scripts/copy-maplibre-worker.mjs
+/public/maplibre/
